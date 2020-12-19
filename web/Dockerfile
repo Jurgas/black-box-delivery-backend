@@ -4,5 +4,4 @@ WORKDIR /app
 ADD requirements.txt /app
 RUN pip3 install -r requirements.txt
 ADD . /app
-EXPOSE 8000
-ENTRYPOINT ["gunicorn", "app:app"]
+CMD ["python", "app.py"]
