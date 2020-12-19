@@ -1,26 +1,48 @@
-from flask import Flask, request, make_response, session
-from flask_session import Session
-from flask_cors import CORS, cross_origin
+from flask import Flask, request, make_response, g
+from flask_hal import HAL
+from flask_hal.document import Document, Embedded
+from flask_hal.link import Link
 from dotenv import load_dotenv
 from bcrypt import hashpw, gensalt, checkpw
 from os import getenv
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import uuid
-from redis import Redis
+from redis import Redis, StrictRedis
+from jwt import encode, decode, InvalidTokenError
 
-db = Redis(host='redis', port=6379, db=0)
+# db = Redis(host='redis', port=6379, db=0)
 
 load_dotenv()
+REDIS_HOST = getenv("REDIS_HOST")
+REDIS_PASS = getenv("REDIS_PASS")
+db = StrictRedis(REDIS_HOST, db=0, password=REDIS_PASS, port=32179)
+JWT_SECRET = getenv("JWT_SECRET")
 
-SESSION_TYPE = 'redis'
-SESSION_REDIS = db
 app = Flask(__name__)
 app.config.from_object(__name__)
 app.secret_key = getenv("SECRET_KEY")
-ses = Session(app)
-cors = CORS(app)
-app.config['CORS_HEADERS'] = 'Content-Type'
+
+HAL(app)
+
+
+def generate_auth_token(username):
+    payload = {
+        "sub": username,
+        "role": "sender",
+        "iat": datetime.utcnow(),
+        "exp": datetime.utcnow() + timedelta(hours=1),
+    }
+    token = encode(payload, JWT_SECRET, algorithm='HS256')
+    return token
+
+
+def allowed_methods(methods):
+    if 'OPTIONS' not in methods:
+        methods.append('OPTIONS')
+    response = make_response('', 204)
+    response.headers['Allow'] = ', '.join(methods)
+    return response
 
 
 def create_response(msg, status):
@@ -59,21 +81,52 @@ def save_label(label_id, username, receiver, size, po_box_id):
     db.hset(f"label:{label_id}", "receiver", f"{receiver}")
     db.hset(f"label:{label_id}", "size", f"{size}")
     db.hset(f"label:{label_id}", "POBoxId", f"{po_box_id}")
+    db.hset(f"label:{label_id}", "sent", "False")
     return True
 
 
-@app.route('/sender/available', methods=["POST"])
-@cross_origin(supports_credentials=True)
-def sender_available():
-    username = request.json.get('username')
-    if user_exists(username):
-        return create_response("Username already exists", 409)
-    return create_response("Available", 200)
+def save_package(package_id, label_id):
+    db.hset(f"package:{package_id}", "labelId", f"{label_id}")
+    db.hset(f"package:{package_id}", "status", "On the way")
+    return True
 
 
-@app.route('/sender/create', methods=["POST"])
-@cross_origin(supports_credentials=True)
-def sender_create():
+@app.before_request
+def before_request_func():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    try:
+        g.authorization = decode(token, JWT_SECRET, algorithms=['HS256'])
+    except InvalidTokenError as e:
+        g.authorization = None
+    return
+
+
+@app.route('/', methods=['GET', 'OPTIONS'])
+def root():
+    if request.method == 'OPTIONS':
+        return allowed_methods(['GET'])
+    links = [Link('auth', '/auth'),
+             Link('user', '/user'),
+             Link('labels', '/labels'),
+             Link('packages', '/packages')]
+    document = Document(data={}, links=links)
+    return document.to_json()
+
+
+@app.route('/auth', methods=['GET', 'OPTIONS'])
+def auth():
+    if request.method == 'OPTIONS':
+        return allowed_methods(['GET'])
+    links = [Link('register', '/auth/register'),
+             Link('login', '/auth/login')]
+    document = Document(data={}, links=links)
+    return document.to_json()
+
+
+@app.route('/auth/register', methods=['POST', 'OPTIONS'])
+def auth_register():
+    if request.method == 'OPTIONS':
+        return allowed_methods(['POST'])
     firstname = request.json.get('firstname')
     lastname = request.json.get('lastname')
     username = request.json.get('username')
@@ -104,41 +157,88 @@ def sender_create():
     if not save_user(username, password, firstname, lastname, email, address):
         return create_response("An error occurred", 500)
 
-    return create_response("Account created", 201)
+    links = [Link('next', '/auth/login')]
+    data = {'message': 'Account created'}
+    document = Document(data=data, links=links)
+
+    return document.to_json()
 
 
-@app.route('/sender/label', methods=["GET"])
-@cross_origin(supports_credentials=True)
-def sender_get_labels():
-    if not session.get("username"):
+@app.route('/auth/login', methods=['POST', 'OPTIONS'])
+def auth_login():
+    if request.method == 'OPTIONS':
+        return allowed_methods(['POST'])
+    username = request.json.get('username')
+    password = request.json.get('password')
+
+    if not verify_user(username, password):
+        return create_response("Incorrect username or/and password", 400)
+
+    token = generate_auth_token(username)
+    response = make_response('', 200)
+    response.headers['Authorization'] = 'Bearer ' + token.decode()
+    return response
+
+
+@app.route('/user', methods=['GET', 'OPTIONS'])
+def user():
+    if request.method == 'OPTIONS':
+        return allowed_methods(['GET'])
+    links = [Link('available', '/user/available')]
+    document = Document(data={}, links=links)
+    return document.to_json()
+
+
+@app.route('/user/available', methods=['POST', 'OPTIONS'])
+def auth_available():
+    if request.method == 'OPTIONS':
+        return allowed_methods(['POST'])
+    username = request.json.get('username')
+    if user_exists(username):
+        return create_response("Username already exists", 409)
+    data = {'message': 'Available'}
+    document = Document(data=data)
+    return document.to_json()
+
+
+@app.route('/labels', methods=['GET', 'OPTIONS'])
+def labels_get():
+    if request.method == 'OPTIONS':
+        return allowed_methods(['GET', 'POST'])
+    if g.authorization is None:
         return create_response("Unauthorized", 401)
-    username = session.get("username")
+    username = g.authorization.get('sub')
     keys = db.keys(pattern='label*')
     data = []
     for key in keys:
         db_user = db.hget(key, "username").decode()
-        if username == db_user:
+        if username == db_user or g.authorization.get('role') == 'courier':
             receiver = db.hget(key, "receiver").decode()
             size = db.hget(key, "size").decode()
             po_box_id = db.hget(key, "POBoxId").decode()
+            sent = db.hget(key, "sent").decode()
             label_id = key.decode().split(":")[1]
-            json_string = {
+            link = Link('self', '/labels/' + label_id)
+            item = {
                 "labelId": label_id,
                 "username": db_user,
                 "receiver": receiver,
                 "size": size,
-                "POBoxId": po_box_id
+                "POBoxId": po_box_id,
+                "sent": sent
             }
-            data.append(json_string)
-    return make_response({"data": data}, 200)
+            data.append(Embedded(data=item, links=[link]))
+    links = [Link('find', '/labels/{id}', templated=True)]
+    document = Document(embedded={'data': Embedded(data=data)},
+                        links=links)
+    return document.to_json()
 
 
-@app.route('/sender/label', methods=["POST"])
-@cross_origin(supports_credentials=True)
-def sender_add_label():
-    if not session.get("username"):
+@app.route('/labels', methods=["POST"])
+def labels_add():
+    if g.authorization is None:
         return create_response("Unauthorized", 401)
-    username = session.get("username")
+    username = g.authorization.get('sub')
     receiver = request.json.get('receiver')
     size = request.json.get('size')
     po_box_id = request.json.get('POBoxId')
@@ -148,67 +248,144 @@ def sender_add_label():
         return create_response("Invalid size", 400)
     if po_box_id is None:
         return create_response("Invalid PO box id", 400)
-    label_id = uuid.uuid4()
+    label_id = str(uuid.uuid4())
 
     if not save_label(label_id, username, receiver, size, po_box_id):
         return create_response("An error occurred", 500)
 
-    response = make_response({"labelId": label_id,
-                              "username": username,
-                              "receiver": receiver,
-                              "size": size,
-                              "POBoxId": po_box_id}, 201)
-    return response
+    data = {"labelId": label_id,
+            "username": username,
+            "receiver": receiver,
+            "size": size,
+            "POBoxId": po_box_id}
+    links = [Link('find', '/labels/' + label_id)]
+    document = Document(data=data, links=links)
+    return document.to_json()
 
 
-@app.route('/sender/label/<label_id>', methods=["DELETE"])
-@cross_origin(supports_credentials=True)
-def sender_delete_label(label_id):
-    if not session.get("username"):
+@app.route('/labels/<label_id>', methods=['GET', 'OPTIONS'])
+def labels_single(label_id):
+    if request.method == 'OPTIONS':
+        return allowed_methods(['GET', 'DELETE'])
+    if g.authorization is None:
         return create_response("Unauthorized", 401)
-    username = session.get("username")
+    username = g.authorization.get('sub')
+    if not db.hexists(f"label:{label_id}", "username"):
+        return create_response(f"Label not found", 404)
     db_user = db.hget(f"label:{label_id}", "username").decode()
     if username != db_user:
-        return create_response(f"Label with {label_id} does not exist", 400)
+        return create_response(f"Label not found", 404)
     receiver = db.hget(f"label:{label_id}", "receiver").decode()
     size = db.hget(f"label:{label_id}", "size").decode()
     po_box_id = db.hget(f"label:{label_id}", "POBoxId").decode()
-    db.delete(f"label:{label_id}")
-    return make_response({"labelId": label_id,
-                          "username": username,
-                          "receiver": receiver,
-                          "size": size,
-                          "POBoxId": po_box_id}, 200)
+    sent = db.hget(f"label:{label_id}", "sent").decode()
+    data = {"labelId": label_id,
+            "username": username,
+            "receiver": receiver,
+            "size": size,
+            "POBoxId": po_box_id,
+            "sent": sent}
+    document = Document(data=data)
+    return document.to_json()
 
 
-@app.route('/auth/login', methods=["POST"])
-@cross_origin(supports_credentials=True)
-def auth_login():
-    username = request.json.get('username')
-    password = request.json.get('password')
-
-    if not verify_user(username, password):
-        return create_response("Incorrect username or/and password", 400)
-
-    session["username"] = username
-    session["logged-at"] = datetime.now()
-
-    return create_response("Login success", 200)
-
-
-@app.route('/auth/logout', methods=["POST"])
-@cross_origin(supports_credentials=True)
-def auth_logout():
-    session.clear()
-    return create_response("Logout success", 200)
-
-
-@app.route('/auth/logged', methods=["GET"])
-@cross_origin(supports_credentials=True)
-def auth_logged_in():
-    if not session.get("username"):
+@app.route('/labels/<label_id>', methods=["DELETE"])
+def labels_delete(label_id):
+    if g.authorization is None:
         return create_response("Unauthorized", 401)
-    return create_response("Is logged in", 200)
+    username = g.authorization.get('sub')
+    if not db.hexists(f"label:{label_id}", "username"):
+        return create_response(f"Label not found", 404)
+    db_user = db.hget(f"label:{label_id}", "username").decode()
+    if username != db_user:
+        return create_response(f"Label with {label_id} does not exist", 400)
+    db.delete(f"label:{label_id}")
+    links = [Link('next', '/labels')]
+    document = Document(data={}, links=links)
+    return document.to_json()
+
+
+@app.route('/packages', methods=['GET', 'OPTIONS'])
+def packages_get():
+    if request.method == 'OPTIONS':
+        return allowed_methods(['GET', 'POST'])
+    if g.authorization is None or g.authorization.get('role') != 'courier':
+        return create_response("Unauthorized", 401)
+    keys = db.keys(pattern='package*')
+    data = []
+    for key in keys:
+        package_id = key.decode().split(":")[1]
+        label_id = db.hget(key, "labelId").decode()
+        status = db.hget(key, "status").decode()
+        link = Link('self', '/package/' + package_id)
+        item = {
+            "packageId": package_id,
+            "labelId": label_id,
+            "status": status,
+        }
+        data.append(Embedded(data=item, links=[link]))
+    links = [Link('find', '/package/{id}', templated=True)]
+    document = Document(embedded={'data': Embedded(data=data)},
+                        links=links)
+    return document.to_json()
+
+
+@app.route('/packages', methods=['POST'])
+def packages_create():
+    if g.authorization is None or g.authorization.get('role') != 'courier':
+        return create_response("Unauthorized", 401)
+    label_id = request.json.get('labelId')
+    if not db.hexists(f"label:{label_id}", "username"):
+        return create_response("Label does not exists", 404)
+    if db.hget(f"label:{label_id}", "sent").decode() == "True":
+        return create_response("Label already sent", 400)
+    package_id = str(uuid.uuid4())
+    if not save_package(package_id, label_id):
+        return create_response("An error occurred", 500)
+    db.hset(f"label:{label_id}", "sent", "True")
+
+    data = {"packageId": package_id,
+            "labelId": label_id,
+            "status": "On the way"}
+    links = [Link('find', '/packages/' + package_id)]
+    document = Document(data=data, links=links)
+    return document.to_json()
+
+
+@app.route('/packages/<package_id>', methods=['GET', 'OPTIONS'])
+def packages_single_get(package_id):
+    if request.method == 'OPTIONS':
+        return allowed_methods(['GET', 'PUT'])
+    if g.authorization is None or g.authorization.get('role') != 'courier':
+        return create_response("Unauthorized", 401)
+    if not db.hexists(f"package:{package_id}", "labelId"):
+        return create_response("Package not found", 404)
+    label_id = db.hget(f"package:{package_id}", "labelId").decode()
+    status = db.hget(f"package:{package_id}", "status").decode()
+    data = {"packageId": package_id,
+            "labelId": label_id,
+            "status": status}
+    document = Document(data=data)
+    return document.to_json()
+
+
+@app.route('/packages/<package_id>', methods=['PUT'])
+def packages_update(package_id):
+    if g.authorization is None or g.authorization.get('role') != 'courier':
+        return create_response("Unauthorized", 401)
+    if not db.hexists(f"package:{package_id}", "labelId"):
+        return create_response("Package not found", 404)
+    status = request.json.get('status')
+    statuses = ["On the way", "Delivered", "Picked up"]
+    if status not in statuses:
+        return create_response("Invalid status", 400)
+    db.hset(f"package:{package_id}", "status", status)
+    label_id = db.hget(f"package:{package_id}", "labelId").decode()
+    data = {"packageId": package_id,
+            "labelId": label_id,
+            "status": status}
+    document = Document(data=data)
+    return document.to_json()
 
 
 if __name__ == '__main__':

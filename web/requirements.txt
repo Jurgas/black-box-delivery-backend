@@ -1,8 +1,7 @@
 Flask
-Flask-Session
-Flask-Cors
+Flask-Hal
 gunicorn
 python-dotenv
 redis
 bcrypt
-jwt
+PyJWT
