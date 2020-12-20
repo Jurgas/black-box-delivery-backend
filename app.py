@@ -24,7 +24,8 @@ app = Flask(__name__)
 app.config.from_object(__name__)
 app.secret_key = getenv("SECRET_KEY")
 app.config['CORS_HEADERS'] = 'Content-Type'
-app.config['CORS_ORIGINS'] = ['http://localhost:5000', 'https://black-box-delivery.herokuapp.com']
+app.config['CORS_ORIGINS'] = ['http://localhost:5000', 'http://localhost:3000',
+                              'https://black-box-delivery.herokuapp.com']
 HAL(app)
 
 
