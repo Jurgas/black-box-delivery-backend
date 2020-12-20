@@ -1,5 +1,6 @@
 Flask
 Flask-Hal
+Flask-Cors
 gunicorn
 python-dotenv
 redis

@@ -10,6 +10,7 @@ import re
 import uuid
 from redis import Redis, StrictRedis
 from jwt import encode, decode, InvalidTokenError
+from flask_cors import CORS, cross_origin
 
 # db = Redis(host='redis', port=6379, db=0)
 
@@ -22,6 +23,8 @@ JWT_SECRET = getenv("JWT_SECRET")
 app = Flask(__name__)
 app.config.from_object(__name__)
 app.secret_key = getenv("SECRET_KEY")
+app.config['CORS_HEADERS'] = 'Content-Type'
+app.config['CORS_ORIGINS'] = ['http://localhost:5000', 'https://black-box-delivery.herokuapp.com']
 
 HAL(app)
 
@@ -102,6 +105,7 @@ def before_request_func():
 
 
 @app.route('/', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def root():
     if request.method == 'OPTIONS':
         return allowed_methods(['GET'])
@@ -114,6 +118,7 @@ def root():
 
 
 @app.route('/auth', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def auth():
     if request.method == 'OPTIONS':
         return allowed_methods(['GET'])
@@ -124,6 +129,7 @@ def auth():
 
 
 @app.route('/auth/register', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def auth_register():
     if request.method == 'OPTIONS':
         return allowed_methods(['POST'])
@@ -165,6 +171,7 @@ def auth_register():
 
 
 @app.route('/auth/login', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def auth_login():
     if request.method == 'OPTIONS':
         return allowed_methods(['POST'])
@@ -181,6 +188,7 @@ def auth_login():
 
 
 @app.route('/user', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def user():
     if request.method == 'OPTIONS':
         return allowed_methods(['GET'])
@@ -202,6 +210,7 @@ def auth_available():
 
 
 @app.route('/labels', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def labels_get():
     if request.method == 'OPTIONS':
         return allowed_methods(['GET', 'POST'])
@@ -235,6 +244,7 @@ def labels_get():
 
 
 @app.route('/labels', methods=["POST"])
+@cross_origin()
 def labels_add():
     if g.authorization is None:
         return create_response("Unauthorized", 401)
@@ -264,6 +274,7 @@ def labels_add():
 
 
 @app.route('/labels/<label_id>', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def labels_single(label_id):
     if request.method == 'OPTIONS':
         return allowed_methods(['GET', 'DELETE'])
@@ -290,6 +301,7 @@ def labels_single(label_id):
 
 
 @app.route('/labels/<label_id>', methods=["DELETE"])
+@cross_origin()
 def labels_delete(label_id):
     if g.authorization is None:
         return create_response("Unauthorized", 401)
@@ -306,6 +318,7 @@ def labels_delete(label_id):
 
 
 @app.route('/packages', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def packages_get():
     if request.method == 'OPTIONS':
         return allowed_methods(['GET', 'POST'])
@@ -331,6 +344,7 @@ def packages_get():
 
 
 @app.route('/packages', methods=['POST'])
+@cross_origin()
 def packages_create():
     if g.authorization is None or g.authorization.get('role') != 'courier':
         return create_response("Unauthorized", 401)
@@ -353,6 +367,7 @@ def packages_create():
 
 
 @app.route('/packages/<package_id>', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def packages_single_get(package_id):
     if request.method == 'OPTIONS':
         return allowed_methods(['GET', 'PUT'])
@@ -370,6 +385,7 @@ def packages_single_get(package_id):
 
 
 @app.route('/packages/<package_id>', methods=['PUT'])
+@cross_origin()
 def packages_update(package_id):
     if g.authorization is None or g.authorization.get('role') != 'courier':
         return create_response("Unauthorized", 401)
