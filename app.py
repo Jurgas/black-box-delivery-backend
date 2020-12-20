@@ -25,7 +25,6 @@ app.config.from_object(__name__)
 app.secret_key = getenv("SECRET_KEY")
 app.config['CORS_HEADERS'] = 'Content-Type'
 app.config['CORS_ORIGINS'] = ['http://localhost:5000', 'https://black-box-delivery.herokuapp.com']
-
 HAL(app)
 
 
@@ -171,7 +170,7 @@ def auth_register():
 
 
 @app.route('/auth/login', methods=['POST', 'OPTIONS'])
-@cross_origin()
+@cross_origin(expose_headers=['Authorization'])
 def auth_login():
     if request.method == 'OPTIONS':
         return allowed_methods(['POST'])
@@ -212,7 +211,7 @@ def user_available():
 
 
 @app.route('/user/current', methods=['GET', 'OPTIONS'])
-@cross_origin()
+@cross_origin(headers=['Authorization'])
 def user_current():
     if request.method == 'OPTIONS':
         return allowed_methods(['GET'])
@@ -224,7 +223,7 @@ def user_current():
 
 
 @app.route('/labels', methods=['GET', 'OPTIONS'])
-@cross_origin()
+@cross_origin(headers=['Authorization'])
 def labels_get():
     if request.method == 'OPTIONS':
         return allowed_methods(['GET', 'POST'])
@@ -258,7 +257,7 @@ def labels_get():
 
 
 @app.route('/labels', methods=["POST"])
-@cross_origin()
+@cross_origin(headers=['Authorization'])
 def labels_add():
     if g.authorization is None:
         return create_response("Unauthorized", 401)
@@ -288,7 +287,7 @@ def labels_add():
 
 
 @app.route('/labels/<label_id>', methods=['GET', 'OPTIONS'])
-@cross_origin()
+@cross_origin(headers=['Authorization'])
 def labels_single(label_id):
     if request.method == 'OPTIONS':
         return allowed_methods(['GET', 'DELETE'])
@@ -315,7 +314,7 @@ def labels_single(label_id):
 
 
 @app.route('/labels/<label_id>', methods=["DELETE"])
-@cross_origin()
+@cross_origin(headers=['Authorization'])
 def labels_delete(label_id):
     if g.authorization is None:
         return create_response("Unauthorized", 401)
@@ -332,7 +331,7 @@ def labels_delete(label_id):
 
 
 @app.route('/packages', methods=['GET', 'OPTIONS'])
-@cross_origin()
+@cross_origin(headers=['Authorization'])
 def packages_get():
     if request.method == 'OPTIONS':
         return allowed_methods(['GET', 'POST'])
@@ -358,7 +357,7 @@ def packages_get():
 
 
 @app.route('/packages', methods=['POST'])
-@cross_origin()
+@cross_origin(headers=['Authorization'])
 def packages_create():
     if g.authorization is None or g.authorization.get('role') != 'courier':
         return create_response("Unauthorized", 401)
@@ -381,7 +380,7 @@ def packages_create():
 
 
 @app.route('/packages/<package_id>', methods=['GET', 'OPTIONS'])
-@cross_origin()
+@cross_origin(headers=['Authorization'])
 def packages_single_get(package_id):
     if request.method == 'OPTIONS':
         return allowed_methods(['GET', 'PUT'])
@@ -399,7 +398,7 @@ def packages_single_get(package_id):
 
 
 @app.route('/packages/<package_id>', methods=['PUT'])
-@cross_origin()
+@cross_origin(headers=['Authorization'])
 def packages_update(package_id):
     if g.authorization is None or g.authorization.get('role') != 'courier':
         return create_response("Unauthorized", 401)
