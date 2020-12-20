@@ -192,19 +192,33 @@ def auth_login():
 def user():
     if request.method == 'OPTIONS':
         return allowed_methods(['GET'])
-    links = [Link('available', '/user/available')]
+    links = [Link('available', '/user/available'),
+             Link('current', '/user/current')]
     document = Document(data={}, links=links)
     return document.to_json()
 
 
 @app.route('/user/available', methods=['POST', 'OPTIONS'])
-def auth_available():
+@cross_origin()
+def user_available():
     if request.method == 'OPTIONS':
         return allowed_methods(['POST'])
     username = request.json.get('username')
     if user_exists(username):
         return create_response("Username already exists", 409)
     data = {'message': 'Available'}
+    document = Document(data=data)
+    return document.to_json()
+
+
+@app.route('/user/current', methods=['GET', 'OPTIONS'])
+@cross_origin()
+def user_current():
+    if request.method == 'OPTIONS':
+        return allowed_methods(['GET'])
+    if g.authorization is None:
+        return create_response("Unauthorized", 401)
+    data = {'username': g.authorization.get('sub')}
     document = Document(data=data)
     return document.to_json()
 
