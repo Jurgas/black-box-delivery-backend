@@ -71,12 +71,34 @@ def save_user(username, password, firstname, lastname, email, address):
     return True
 
 
+def user_not_register(email):
+    if db.hexists(f"auth:{email}", "sub"):
+        return False
+    return True
+
+
+def save_auth0_user(email, sub):
+    salt = gensalt(4)
+    password = sub.encode()
+    hashed_sub = hashpw(password, salt)
+    db.hset(f"auth:{email}", "sub", hashed_sub)
+    return True
+
+
 def verify_user(username, password):
     password = password.encode()
     hashed = db.hget(f"user:{username}", "password")
     if not hashed:
         return False
     return checkpw(password, hashed)
+
+
+def verify_auth0_user(email, sub):
+    sub = sub.encode()
+    hashed = db.hget(f"auth:{email}", "sub")
+    if not hashed:
+        return False
+    return checkpw(sub, hashed)
 
 
 def save_label(label_id, username, receiver, size, po_box_id):
@@ -182,6 +204,28 @@ def auth_login():
         return create_response("Incorrect username or/and password", 400)
 
     token = generate_auth_token(username)
+    response = make_response('', 200)
+    response.headers['Authorization'] = 'Bearer ' + token.decode()
+    return response
+
+
+@app.route('/auth/auth0', methods=['POST'])
+@cross_origin(expose_headers=['Authorization'])
+def auth_auth0():
+    email = request.json.get('email')
+    sub = request.json.get('sub')
+
+    if user_exists(email):
+        return create_response("Username already exists", 400)
+
+    if user_not_register(email):
+        if not save_auth0_user(email, sub):
+            return create_response("An error occurred", 500)
+
+    if not verify_auth0_user(email, sub):
+        return create_response("An error occurred", 400)
+
+    token = generate_auth_token(email)
     response = make_response('', 200)
     response.headers['Authorization'] = 'Bearer ' + token.decode()
     return response
